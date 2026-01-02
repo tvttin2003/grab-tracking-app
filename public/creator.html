@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Người Tạo Đơn - Hệ Thống Tracking</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; background: #f4f7f6; }
+        header { background: #00b14f; padding: 10px 20px; color: white; display: flex; gap: 20px; }
+        header a { color: white; text-decoration: none; font-weight: bold; cursor: pointer; }
+        .container { display: flex; gap: 20px; padding: 20px; height: 85vh; }
+        .form-side { width: 45%; background: white; padding: 20px; overflow-y: auto; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .map-side { width: 55%; position: relative; border-radius: 8px; overflow: hidden; }
+        #map { height: 100%; width: 100%; }
+        
+        .section-title { border-left: 4px solid #00b14f; padding-left: 10px; margin: 20px 0 10px; font-weight: bold; }
+        input, select { width: 100%; padding: 10px; margin: 5px 0; box-sizing: border-box; border: 1px solid #ddd; border-radius: 4px; }
+        .product-row { display: flex; gap: 10px; align-items: center; margin-bottom: 5px; }
+        .btn-add { color: #00b14f; cursor: pointer; font-size: 14px; font-weight: bold; }
+        
+        .summary-box { background: #fffbe6; padding: 15px; border: 1px dashed #ffe58f; margin-top: 20px; }
+        .price-row { display: flex; justify-content: space-between; align-items: center; margin: 5px 0; }
+        .editable-price { border: none; background: transparent; text-align: right; font-weight: bold; width: 100px; }
+        .footer-btns { display: flex; gap: 10px; margin-top: 20px; }
+        .btn-confirm { flex: 2; background: #00b14f; color: white; border: none; padding: 15px; font-weight: bold; border-radius: 5px; cursor: pointer; }
+        .btn-cancel { flex: 1; background: #ccc; border: none; border-radius: 5px; cursor: pointer; }
+        
+        /* Modal Thêm sản phẩm mới */
+        #modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.3); z-index: 2000; width: 300px; }
+        #overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1999; }
+    </style>
+</head>
+<body>
+
+<header>
+    <a href="#">Trang chủ</a>
+    <a href="#">Theo dõi đơn hàng</a>
+    <a href="#">Hàng hoá</a>
+    <a href="#">Tài Xế</a>
+    <a href="#">Lịch sử đơn hàng</a>
+</header>
+
+<div class="container">
+    <div class="form-side">
+        <div class="section-title">ĐỊA ĐIỂM</div>
+        <button onclick="pickOnMap('pickup')" style="width: 48%;">Chọn điểm lấy hàng</button>
+        <button onclick="pickOnMap('dropoff')" style="width: 48%; float: right;">Chọn điểm giao hàng</button>
+        <div id="location-display" style="font-size: 12px; color: #666; margin-top: 5px;">Chưa chọn điểm</div>
+
+        <div class="section-title">THÔNG TIN NGƯỜI NHẬN</div>
+        <input type="text" id="sender-name" placeholder="Tên người gửi">
+        <input type="text" id="sender-phone" placeholder="SĐT người gửi">
+        <input type="text" id="receiver-name" placeholder="Tên người nhận">
+        <input type="text" id="receiver-phone" placeholder="SĐT người nhận">
+
+        <div class="section-title">SẢN PHẨM</div>
+        <div id="product-list">
+            <div class="product-row">
+                <select class="prod-select" onchange="handleProductSelect(this)">
+                    <option value="">-- Chọn sản phẩm --</option>
+                    <option value="plus">+ Thêm sản phẩm mới</option>
+                </select>
+                <input type="number" class="prod-qty" value="1" min="1" max="10" style="width: 60px;" onchange="calculateTotal()">
+            </div>
+        </div>
+        <div class="btn-add" onclick="addNewProductRow()">+ Thêm sản phẩm khác</div>
+
+        <div class="section-title">THANH TOÁN</div>
+        <select id="pay-method" onchange="toggleCodInput()">
+            <option value="ONLINE">1. Đã Thanh Toán</option>
+            <option value="COD">2. Thanh Toán Khi Nhận Hàng (COD)</option>
+        </select>
+        <input type="number" id="cod-amount" placeholder="Nhập số tiền cần thu khách" style="display: none;">
+
+        <div class="summary-box">
+            <div class="price-row">
+                <span>Phí ship:</span>
+                <div>
+                    <input type="number" id="ship-fee" class="editable-price" value="0"> VND ✎
+                </div>
+            </div>
+            <div class="price-row">
+                <span>Tổng cộng (Tiền hàng + Ship):</span>
+                <div>
+                    <input type="number" id="total-bill" class="editable-price" value="0"> VND ✎
+                </div>
+            </div>
+        </div>
+
+        <div class="footer-btns">
+            <button class="btn-cancel" onclick="location.reload()">Huỷ</button>
+            <button class="btn-confirm" onclick="confirmOrder()">XÁC NHẬN ĐƠN HÀNG</button>
+        </div>
+    </div>
+
+    <div class="map-side">
+        <div id="map"></div>
+    </div>
+</div>
+
+<div id="overlay"></div>
+<div id="modal">
+    <h3>Thêm sản phẩm mới</h3>
+    <input type="text" id="new-prod-name" placeholder="Tên sản phẩm">
+    <input type="number" id="new-prod-price" placeholder="Đơn giá (VNĐ)">
+    <button onclick="saveNewProduct()" style="background: #00b14f; color: white; border: none; padding: 10px; width: 100%; margin-top: 10px;">Lưu</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+
+<script>
+    const socket = io();
+    let map, pickupPoint, dropoffPoint;
+    let productsDB = []; // Lưu danh sách SP đã tạo
+    let currentPicking = null;
+
+    // Khởi tạo Map
+    map = L.map('map').setView([10.0159, 105.7620], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    L.Control.geocoder().addTo(map);
+
+    function pickOnMap(type) {
+        currentPicking = type;
+        alert("Vui lòng nhấp vào vị trí trên bản đồ để chọn " + (type === 'pickup' ? 'Điểm lấy' : 'Điểm giao'));
+    }
+
+    map.on('click', (e) => {
+        if (!currentPicking) return;
+        if (currentPicking === 'pickup') {
+            if (pickupPoint) map.removeLayer(pickupPoint);
+            pickupPoint = L.marker(e.latlng, {draggable: true}).addTo(map).bindPopup("Điểm lấy").openPopup();
+        } else {
+            if (dropoffPoint) map.removeLayer(dropoffPoint);
+            dropoffPoint = L.marker(e.latlng, {draggable: true, icon: L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png'})}).addTo(map).bindPopup("Điểm giao").openPopup();
+        }
+        calculateShipFee();
+        currentPicking = null;
+    });
+
+    function handleProductSelect(select) {
+        if (select.value === 'plus') {
+            document.getElementById('modal').style.display = 'block';
+            document.getElementById('overlay').style.display = 'block';
+            select.selectedIndex = 0;
+        }
+        calculateTotal();
+    }
+
+    function saveNewProduct() {
+        const name = document.getElementById('new-prod-name').value;
+        const price = parseInt(document.getElementById('new-prod-price').value);
+        if (!name || !price) return;
+
+        productsDB.push({ name, price });
+        
+        // Cập nhật tất cả các thẻ select
+        document.querySelectorAll('.prod-select').forEach(sel => {
+            const opt = document.createElement('option');
+            opt.value = price;
+            opt.text = name + " (" + price.toLocaleString() + "đ)";
+            sel.add(opt, sel.options[1]);
+        });
+
+        document.getElementById('modal').style.display = 'none';
+        document.getElementById('overlay').style.display = 'none';
+    }
+
+    function addNewProductRow() {
+        const row = document.querySelector('.product-row').cloneNode(true);
+        row.querySelector('.prod-qty').value = 1;
+        document.getElementById('product-list').appendChild(row);
+    }
+
+    function calculateShipFee() {
+        if (!pickupPoint || !dropoffPoint) return;
+        const dist = map.distance(pickupPoint.getLatLng(), dropoffPoint.getLatLng()) / 1000; // km
+        let fee = 20000;
+        if (dist > 3 && dist <= 7) fee = 20000 + (dist - 3) * 5000;
+        else if (dist > 7) fee = 20000 + 4 * 5000 + (dist - 7) * 3000;
+        
+        document.getElementById('ship-fee').value = Math.round(fee);
+        calculateTotal();
+    }
+
+    function calculateTotal() {
+        let prodTotal = 0;
+        document.querySelectorAll('.product-row').forEach(row => {
+            const price = parseInt(row.querySelector('.prod-select').value) || 0;
+            const qty = parseInt(row.querySelector('.prod-qty').value) || 0;
+            prodTotal += price * qty;
+        });
+        const shipFee = parseInt(document.getElementById('ship-fee').value) || 0;
+        document.getElementById('total-bill').value = prodTotal + shipFee;
+    }
+
+    function toggleCodInput() {
+        document.getElementById('cod-amount').style.display = (document.getElementById('pay-method').value === 'COD') ? 'block' : 'none';
+    }
+
+    function confirmOrder() {
+        const orderData = {
+            id: Date.now(),
+            pickup: pickupPoint.getLatLng(),
+            dropoff: dropoffPoint.getLatLng(),
+            sender: document.getElementById('sender-name').value,
+            receiver: document.getElementById('receiver-name').value,
+            total: document.getElementById('total-bill').value,
+            status: 'new'
+        };
+        socket.emit('create-order', orderData);
+        alert("Đơn hàng đã được gửi tới tài xế!");
+    }
+</script>
+</body>
+</html>
