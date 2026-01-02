@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tài xế - Tạo đơn hàng</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        #form-container { padding: 20px; background: #f4f4f4; z-index: 1000; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        #map-select { flex-grow: 1; width: 100%; } /* Map rộng ra toàn màn hình còn lại */
+        .row { display: flex; gap: 10px; margin-bottom: 10px; }
+        input, select, button { padding: 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        .input-main { flex: 2; }
+        .input-sub { flex: 1; }
+        #btn-start { background: #00b14f; color: white; border: none; font-weight: bold; cursor: pointer; width: 100%; }
+        #btn-done { background: #e74c3c; color: white; border: none; font-weight: bold; cursor: pointer; display: none; width: 100%; margin-top: 10px;}
+        
+        #history-container { padding: 20px; background: white; border-top: 2px solid #ccc; max-height: 200px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+
+<div id="form-container">
+    <h2>Tạo đơn hàng mới</h2>
+    <div class="row">
+        <input type="text" id="itemName" class="input-main" placeholder="Tên hàng hóa">
+        <select id="itemQty" class="input-sub">
+            <script>
+                for(let i=1; i<=10; i++) document.write(`<option value="${i}">Số lượng: ${i}</option>`);
+            </script>
+        </select>
+    </div>
+    <div class="row">
+        <select id="paymentStatus" class="input-main" onchange="togglePriceInput()">
+            <option value="Online">Đã thanh toán Online</option>
+            <option value="COD">Thu tiền mặt (COD)</option>
+        </select>
+        <input type="number" id="price" class="input-sub" placeholder="Số tiền thu" style="display: none;">
+    </div>
+    <div id="dest-info" style="margin-bottom: 10px; color: #666;">Chưa chọn điểm đến trên bản đồ</div>
+    <button id="btn-start" onclick="startDelivery()">BẮT ĐẦU GIAO HÀNG</button>
+    <button id="btn-done" onclick="finishDelivery()">ĐÃ GIAO XONG</button>
+</div>
+
+<div id="map-select"></div>
+
+<div id="history-container">
+    <h3>Lịch sử giao hàng</h3>
+    <table id="historyTable">
+        <thead>
+            <tr>
+                <th>STT</th>
+                <th>Đơn hàng</th>
+                <th>Khoảng cách</th>
+                <th>Thời gian hoàn thành</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    const socket = io();
+    let currentPos, destination, deliveryInterval, startPos;
+    let historyCount = 0;
+
+    // 1. Khởi tạo bản đồ
+    const map = L.map('map-select').setView([10.0159, 105.7620], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    // 2. Thêm thanh tìm kiếm
+    L.Control.geocoder().addTo(map);
+
+    let destMarker;
+    map.on('click', (e) => {
+        destination = e.latlng;
+        if (destMarker) map.removeLayer(destMarker);
+        destMarker = L.marker(destination).addTo(map);
+        document.getElementById('dest-info').innerText = `Điểm đến: ${destination.lat.toFixed(4)}, ${destination.lng.toFixed(4)}`;
+    });
+
+    // 3. Logic ẩn hiện ô nhập tiền
+    function togglePriceInput() {
+        const status = document.getElementById('paymentStatus').value;
+        document.getElementById('price').style.display = (status === 'COD') ? 'block' : 'none';
+    }
+
+    // Lấy vị trí GPS thực tế
+    navigator.geolocation.watchPosition(pos => {
+        currentPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    });
+
+    function startDelivery() {
+        if(!destination) return alert("Vui lòng chọn điểm giao trên bản đồ!");
+        
+        startPos = {...currentPos}; // Lưu lại mốc bắt đầu để tính khoảng cách
+        const data = {
+            itemName: document.getElementById('itemName').value,
+            itemQty: document.getElementById('itemQty').value,
+            payment: document.getElementById('paymentStatus').value,
+            price: document.getElementById('price').value || 0,
+            destination: destination,
+            status: 'delivering'
+        };
+
+        document.getElementById('btn-start').style.display = 'none';
+        document.getElementById('btn-done').style.display = 'block';
+
+        deliveryInterval = setInterval(() => {
+            socket.emit('send-location', { ...data, currentPos });
+        }, 3000);
+    }
+
+    function finishDelivery() {
+        clearInterval(deliveryInterval);
+        socket.emit('send-location', { status: 'finished' });
+
+        // Tính khoảng cách
+        const distance = (map.distance([startPos.lat, startPos.lng], [destination.lat, destination.lng]) / 1000).toFixed(2);
+        const timeNow = new Date().toLocaleTimeString();
+        const orderInfo = `${document.getElementById('itemQty').value}x ${document.getElementById('itemName').value}`;
+
+        // Thêm vào bảng lịch sử
+        historyCount++;
+        const table = document.getElementById('historyTable').getElementsByTagName('tbody')[0];
+        const row = table.insertRow(0);
+        row.innerHTML = `<td>${historyCount}</td><td>${orderInfo}</td><td>${distance} km</td><td>${timeNow}</td>`;
+
+        // Reset giao diện
+        document.getElementById('btn-start').style.display = 'block';
+        document.getElementById('btn-done').style.display = 'none';
+        alert("Đã hoàn thành đơn hàng!");
+    }
+</script>
+</body>
+</html>

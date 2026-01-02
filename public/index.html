@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Theo dõi đơn hàng - Khách hàng</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background-color: #f8f9fa;
+        }
+
+        /* Bản đồ chiếm phần lớn màn hình */
+        #map {
+            flex: 1;
+            width: 100%;
+        }
+
+        /* Bảng thông tin đơn hàng phía dưới */
+        #info-panel {
+            background: white;
+            padding: 20px;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+            border-radius: 20px 20px 0 0;
+            z-index: 1000;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .status-badge {
+            background-color: #00b14f;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .order-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .detail-item {
+            font-size: 14px;
+            color: #555;
+        }
+
+        .detail-item b {
+            color: #000;
+            display: block;
+            font-size: 16px;
+        }
+
+        .eta-box {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+            text-align: center;
+            color: #00b14f;
+            font-weight: bold;
+        }
+
+        /* Icon tùy chỉnh cho xe máy */
+        .bike-icon {
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.5));
+        }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div id="info-panel">
+        <div class="header">
+            <h2 style="margin: 0; font-size: 18px;">Thông tin giao hàng</h2>
+            <span id="status" class="status-badge">Đang chờ đơn...</span>
+        </div>
+
+        <div class="order-details">
+            <div class="detail-item">
+                Tên món hàng
+                <b id="item-name">---</b>
+            </div>
+            <div class="detail-item">
+                Số lượng
+                <b id="item-qty">0</b>
+            </div>
+            <div class="detail-item">
+                Hình thức thanh toán
+                <b id="payment-method">---</b>
+            </div>
+            <div class="detail-item">
+                Số tiền cần trả
+                <b id="total-price">0 VNĐ</b>
+            </div>
+        </div>
+
+        <div id="eta" class="eta-box" style="display: none;">
+            Thời gian giao hàng dự kiến: <span id="time-left">...</span>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+
+    <script>
+        const socket = io();
+        
+        // Khởi tạo bản đồ (Mặc định ở Cần Thơ như trong hình của bạn)
+        const map = L.map('map').setView([10.0159, 105.7620], 15);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let driverMarker = null;
+        let destMarker = null;
+
+        // Tạo icon xe máy màu xanh
+        const bikeIcon = L.icon({
+            iconUrl: 'https://cdn-icons-png.flaticon.com/512/71/71422.png',
+            iconSize: [40, 40],
+            iconAnchor: [20, 20],
+            className: 'bike-icon'
+        });
+
+        socket.on('receive-location', (data) => {
+            // Trường hợp 1: Tài xế bấm "Giao xong"
+            if (data.status === 'finished') {
+                if (driverMarker) map.removeLayer(driverMarker);
+                if (destMarker) map.removeLayer(destMarker);
+                document.getElementById('status').innerText = "Đã hoàn tất";
+                document.getElementById('status').style.backgroundColor = "#888";
+                document.getElementById('eta').style.display = "none";
+                alert("Đơn hàng của bạn đã được giao thành công!");
+                return;
+            }
+
+            // Trường hợp 2: Đang giao hàng
+            const { currentPos, destination, itemName, itemQty, price, payment } = data;
+
+            // Cập nhật giao diện chữ
+            document.getElementById('status').innerText = "Tài xế đang đến";
+            document.getElementById('item-name').innerText = itemName;
+            document.getElementById('item-qty').innerText = itemQty;
+            document.getElementById('payment-method').innerText = (payment === 'Online' ? 'Đã thanh toán' : 'Tiền mặt (COD)');
+            document.getElementById('total-price').innerText = (payment === 'Online' ? '0 VNĐ' : price + ' VNĐ');
+            document.getElementById('eta').style.display = "block";
+
+            // Hiển thị/Cập nhật vị trí tài xế
+            if (!driverMarker) {
+                driverMarker = L.marker([currentPos.lat, currentPos.lng], {icon: bikeIcon}).addTo(map);
+            } else {
+                driverMarker.setLatLng([currentPos.lat, currentPos.lng]);
+            }
+
+            // Hiển thị/Cập nhật điểm đến (màu đỏ)
+            if (destination) {
+                if (!destMarker) {
+                    destMarker = L.circleMarker([destination.lat, destination.lng], {
+                        color: 'red',
+                        radius: 10,
+                        fillOpacity: 0.8
+                    }).addTo(map).bindPopup("Điểm giao hàng của bạn").openPopup();
+                }
+
+                // Tính toán thời gian dự kiến (Logic đơn giản)
+                const distance = map.distance([currentPos.lat, currentPos.lng], [destination.lat, destination.lng]);
+                const minutes = Math.round(distance / 250); // Giả sử đi 250m/phút
+                document.getElementById('time-left').innerText = (minutes < 1 ? "Dưới 1 phút" : minutes + " phút");
+            }
+
+            // Luôn để tài xế ở giữa bản đồ
+            map.panTo([currentPos.lat, currentPos.lng]);
+        });
+    </script>
+</body>
+</html>
